@@ -181,6 +181,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--n);color:var(-
 .tcard{background:var(--c);border:1px solid #2a3d70;border-radius:var(--r);padding:12px;margin-bottom:9px;cursor:pointer;transition:.2s}
 .tcard:hover{border-color:var(--g)}.tcard.unread{border-color:var(--g2);background:#1e2f5a}
 .backbtn{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--g2);cursor:pointer;margin-bottom:12px}
+.cat-chip{padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600;border:1px solid #2a3d70;color:var(--m);background:#0d1b3e;cursor:pointer;white-space:nowrap;transition:.2s;flex-shrink:0}
+.cat-chip.active{background:var(--g2);color:#0a1228;border-color:var(--g2)}
+.cat-chip:active{transform:scale(.95)}
 select.inp{appearance:none}
 textarea.inp{resize:vertical;min-height:68px}
 .player-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1e2a4a;gap:8px}
@@ -285,25 +288,19 @@ textarea.inp{resize:vertical;min-height:68px}
   <div class="pgw" id="uPgW">
     <div id="pgHome">
       <div id="winSec"></div>
-      <!-- Step 1: Choose Game -->
+      <!-- Game selection -->
       <div id="stepGame">
         <div class="sec">🎮 Choose Game</div>
         <div id="gameGrid" class="gg"></div>
       </div>
-      <!-- Step 2: Choose Category -->
-      <div id="stepCat" style="display:none">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="sec" style="margin:0" id="catTitle">Categories</div>
+      <!-- Tournament list with category filter -->
+      <div id="stepTourn" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div class="sec" style="margin:0" id="tournTitle">Tournaments</div>
           <span style="font-size:13px;color:var(--g2);cursor:pointer" onclick="backToGames()">← Games</span>
         </div>
-        <div id="catGrid" class="gg"></div>
-      </div>
-      <!-- Step 3: Tournaments -->
-      <div id="stepTourn" style="display:none;margin-top:6px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="sec" style="margin:0" id="tournTitle">Tournaments</div>
-          <span style="font-size:13px;color:var(--g2);cursor:pointer" onclick="backToCats()">← Categories</span>
-        </div>
+        <!-- Category filter chips -->
+        <div id="catChips" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;overflow-x:auto;padding-bottom:4px"></div>
         <div id="tList"></div>
       </div>
     </div>
@@ -704,47 +701,33 @@ function renderGG(){
   document.getElementById('gameGrid').innerHTML=games.map(g=>`<div class="gb${selGId===g.id?' sel':''}" onclick="selGame('${g.id}')"><div class="gi">${g.icon}</div><div class="gn">${g.name}</div></div>`).join('');
 }
 function selGame(gid){
-  selGId=gid;selCatId=null;
-  const g=C.games.find(x=>x.id===gid);
-  const cats=C.categories.filter(c=>c.game_id===gid&&c.active!==false);
-  if(cats.length===0){
-    // No categories - go straight to tournaments
-    showTournStep(gid,null);
-    return;
-  }
-  // Show category step
+  selGId=gid; selCatId=null;
   document.getElementById('stepGame').style.display='none';
-  document.getElementById('stepCat').style.display='block';
-  document.getElementById('stepTourn').style.display='none';
-  document.getElementById('catTitle').textContent=(g?g.icon+' '+g.name:'')+' — Categories';
-  document.getElementById('catGrid').innerHTML=cats.map(c=>`<div class="gb" onclick="selCat('${c.id}')"><div class="gi">${c.icon||'🏆'}</div><div class="gn">${c.name}</div></div>`).join('');
-  renderGG();
-}
-function selCat(catId){
-  selCatId=catId;
-  showTournStep(selGId,catId);
-}
-function showTournStep(gid,catId){
-  document.getElementById('stepGame').style.display='none';
-  document.getElementById('stepCat').style.display='none';
   document.getElementById('stepTourn').style.display='block';
   const g=C.games.find(x=>x.id===gid);
-  const cat=catId?C.categories.find(x=>x.id===catId):null;
-  document.getElementById('tournTitle').textContent=(g?g.icon+' '+g.name:'')+(cat?' — '+cat.name:'');
-  renderTL(gid,catId);
+  if(g) document.getElementById('tournTitle').textContent=g.icon+' '+g.name;
+  renderCatChips(gid);
+  renderTL(gid,null);
   setTimeout(()=>document.getElementById('stepTourn').scrollIntoView({behavior:'smooth',block:'start'}),50);
 }
+function renderCatChips(gid){
+  const cats=C.categories.filter(c=>c.game_id===gid&&c.active!==false);
+  const el=document.getElementById('catChips');
+  if(!cats.length){el.style.display='none';return;}
+  el.style.display='flex';
+  el.innerHTML=`<div class="cat-chip${!selCatId?' active':''}" onclick="filterCat(null)">All</div>`+
+    cats.map(c=>`<div class="cat-chip${selCatId===c.id?' active':''}" onclick="filterCat('${c.id}')">${c.icon||''} ${c.name}</div>`).join('');
+}
+function filterCat(catId){
+  selCatId=catId;
+  renderCatChips(selGId);
+  renderTL(selGId,catId);
+}
 function backToGames(){
-  selGId=null;selCatId=null;
+  selGId=null; selCatId=null;
   document.getElementById('stepGame').style.display='block';
-  document.getElementById('stepCat').style.display='none';
   document.getElementById('stepTourn').style.display='none';
   renderGG();
-}
-function backToCats(){
-  selCatId=null;
-  document.getElementById('stepCat').style.display='block';
-  document.getElementById('stepTourn').style.display='none';
 }
 function clearGame(){backToGames();}
 
@@ -883,7 +866,7 @@ function cmpImg(src,mx,q){return new Promise(res=>{const i=new Image();i.onload=
 // ── PROFILE
 async function renderProfile(){const f=await DB.get('zy_users','id=eq.'+CU.id);if(f?.length)CU=f[0];const av=document.getElementById('profAv');if(CU.pic)av.innerHTML=`<img src="${CU.pic}"/><div class="cov">📷</div>`;else av.innerHTML=`<span>${CU.name[0].toUpperCase()}</span><div class="cov">📷</div>`;document.getElementById('profName').textContent=CU.name;document.getElementById('profUname').textContent='@'+CU.username;document.getElementById('stJ').textContent=(CU.joined||[]).length;document.getElementById('stW').textContent=CU.won||0;document.getElementById('stB').textContent=CU.balance;}
 async function chgPic(input){const file=input.files[0];if(!file)return;const r=new FileReader();r.onload=async e=>{const c=await cmpImg(e.target.result,200,.75);await DB.upd('zy_users','id=eq.'+CU.id,{pic:c});CU.pic=c;renderProfile();updTB();toast('Profile pic updated!');};r.readAsDataURL(file);input.value='';}
-function doShare(){const url='https://zytheron.netlify.app';if(navigator.share)navigator.share({title:'Zytheron',text:'Join Zytheron! 🏆',url});else if(navigator.clipboard){navigator.clipboard.writeText(url);toast('Link copied!');}else toast(url);}
+function doShare(){const url='https://shiam706.github.io/zytheron';if(navigator.share)navigator.share({title:'Zytheron',text:'Join Zytheron! 🏆',url});else if(navigator.clipboard){navigator.clipboard.writeText(url);toast('Link copied!');}else toast(url);}
 
 // ── PAGE SWITCHER
 async function showPg(p){
@@ -895,7 +878,6 @@ async function showPg(p){
   if(p==='profile')renderProfile();
   if(p==='home'){
     document.getElementById('stepGame').style.display='block';
-    document.getElementById('stepCat').style.display='none';
     document.getElementById('stepTourn').style.display='none';
     renderGG();
   }
@@ -910,35 +892,33 @@ function swAdm(tab){document.querySelectorAll('#ats .at2').forEach((el,i)=>el.cl
 function rAdmT(){
   const gs=C.games.filter(g=>g.active);
   const el=document.getElementById('admC');
-  // Game selector for admin
   const selG=C.games.find(x=>x.id===admSelGId);
-  const selCat=C.categories.find(x=>x.id===admSelCatId);
   const cats=admSelGId?C.categories.filter(c=>c.game_id===admSelGId&&c.active!==false):[];
+  const catId=admSelCatId&&admSelCatId!=='none'?admSelCatId:null;
 
-  if(!admSelGId){
-    // Show game selection
-    el.innerHTML=`<div class="sec">🎮 Select Game</div>
-    <div class="gg">${gs.map(g=>`<div class="gb" onclick="admSelGame('${g.id}')"><div class="gi">${g.icon}</div><div class="gn">${g.name}</div></div>`).join('')}</div>`;
-    return;
-  }
-  if(!admSelCatId){
-    // Show category selection + option to add tournament without category
-    el.innerHTML=`<div class="backbtn" onclick="admSelGId=null;rAdmT()">← Games</div>
-    <div class="sec">${selG?selG.icon+' '+selG.name:''} — Categories</div>
-    <div class="gg">${cats.map(c=>`<div class="gb" onclick="admSelCatId='${c.id}';rAdmT()"><div class="gi">${c.icon||'🏆'}</div><div class="gn">${c.name}</div></div>`).join('')}
-    <div class="gb" style="border-style:dashed" onclick="admSelCatId='none';rAdmT()"><div class="gi">➕</div><div class="gn" style="font-size:10px">No Category</div></div></div>`;
-    return;
+  let ts=[];
+  if(admSelGId){
+    ts=C.tournaments.filter(t=>{
+      if(t.game_id!==admSelGId)return false;
+      if(admSelCatId==='none')return !t.category_id;
+      if(admSelCatId)return t.category_id===admSelCatId;
+      return true;
+    });
+    ts=ts.sort((a,b)=>new Date(a.start_time||0)-new Date(b.start_time||0));
   }
 
-  // Show tournaments for this game+category
-  const catFilter=admSelCatId==='none'?null:admSelCatId;
-  let ts=C.tournaments.filter(t=>t.game_id===admSelGId&&(catFilter?t.category_id===catFilter:!t.category_id));
-  ts=ts.sort((a,b)=>new Date(a.start_time||0)-new Date(b.start_time||0));
+  const gameOpts=`<option value="">— Select Game —</option>`+gs.map(g=>`<option value="${g.id}"${admSelGId===g.id?' selected':''}>${g.icon} ${g.name}</option>`).join('');
+  const catOpts=cats.length?(`<option value="">All Categories</option>`+cats.map(c=>`<option value="${c.id}"${admSelCatId===c.id?' selected':''}>${c.icon||''} ${c.name}</option>`).join('')+`<option value="none"${admSelCatId==='none'?' selected':''}>— No Category —</option>`):'';
 
   el.innerHTML=`
-  <div class="backbtn" onclick="admSelCatId=null;rAdmT()">← Categories</div>
-  <div class="sec">${selG?selG.icon+' '+selG.name:''} ${selCat?' — '+selCat.name:''}</div>
+  <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+    <select class="inp" style="flex:1;margin:0;min-width:140px" onchange="admSelGId=this.value;admSelCatId='';rAdmT()">
+      ${gameOpts}
+    </select>
+    ${cats.length?`<select class="inp" style="flex:1;margin:0;min-width:140px" onchange="admSelCatId=this.value;rAdmT()">${catOpts}</select>`:''}
+  </div>
 
+  ${admSelGId?`
   <div class="af">
     <div class="aft">➕ Add Tournament(s)</div>
     <input class="inp" id="tN" placeholder="Tournament Name" autocomplete="off"/>
@@ -963,14 +943,13 @@ function rAdmT(){
     <div class="dvd"></div>
     <div style="font-size:13px;font-weight:700;color:var(--g2);margin-bottom:8px">🔁 Bulk Create</div>
     <div class="irow">
-      <div><span class="ilbl">Quantity (1-50)</span><input class="inp" id="tQty" type="number" placeholder="1" value="1" style="margin:0" min="1" max="50" autocomplete="off"/></div>
-      <div><span class="ilbl">Gap (minutes)</span><input class="inp" id="tGap" type="number" placeholder="0" value="0" style="margin:0" min="0" autocomplete="off"/></div>
+      <div><span class="ilbl">Quantity (1-50)</span><input class="inp" id="tQty" type="number" placeholder="1" value="1" style="margin:0" autocomplete="off"/></div>
+      <div><span class="ilbl">Gap (minutes)</span><input class="inp" id="tGap" type="number" placeholder="0" value="0" style="margin:0" autocomplete="off"/></div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;margin-top:2px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--w)">
         <input type="checkbox" id="tDaily"/> Daily Repeat
       </label>
-      <span style="font-size:11px;color:var(--m)">(same time next day auto-creates)</span>
     </div>
     <button class="bgold" style="width:auto;padding:10px 26px" onclick="admAddT()">Add Tournament(s)</button>
   </div>
@@ -982,8 +961,8 @@ function rAdmT(){
         <div class="ru">${t.name}</div>
         <div class="rd">${t.joined?.length||0}/${t.max_players} players · ৳${t.fee} entry${t.prize_pool?` · ৳${t.prize_pool} prize`:''}</div>
         ${t.start_time?`<div class="rd">⏰ ${new Date(t.start_time).toLocaleString()}</div>`:''}
-        ${t.description?`<div class="rd" style="margin-top:4px;color:var(--m)">${t.description}</div>`:''}
-        ${t.daily_repeat?'<div class="rd" style="color:var(--g3)">🔁 Daily repeat ON</div>':''}
+        ${t.description?`<div class="rd" style="margin-top:4px">${t.description}</div>`:''}
+        ${t.daily_repeat?'<div class="rd" style="color:var(--g3)">🔁 Daily</div>':''}
       </div>
       <span class="badge b${t.status==='live'?'l':t.status==='closed'?'c':'u'}">${t.status.toUpperCase()}</span>
     </div>
@@ -997,17 +976,16 @@ function rAdmT(){
       <button class="bsm bo" onclick="editT('${t.id}')">✏️ Edit</button>
       <button class="bsm bo" onclick="togTS('${t.id}')">⟳ Status</button>
       <button class="bsm bo" onclick="viewPlayers('${t.id}')">👥 Players</button>
-      <button class="bsm bd" onclick="delT('${t.id}')">🗑 Remove</button>
+      <button class="bsm bd" onclick="delT('${t.id}')">🗑</button>
     </div>
-  </div>`).join(''):'<div class="empty">No tournaments yet</div>'}`;
+  </div>`).join(''):'<div class="empty">No tournaments</div>'}
+  `:'<div class="empty">← Select a game above</div>'}`;
 
-  document.getElementById('tRI').addEventListener('change',function(){
-    document.getElementById('tRIBox').style.display=this.checked?'block':'none';
-  });
+  const riEl=document.getElementById('tRI');
+  if(riEl)riEl.addEventListener('change',function(){document.getElementById('tRIBox').style.display=this.checked?'block':'none';});
 }
 
 let admSelGId=null,admSelCatId=null;
-function admSelGame(gid){admSelGId=gid;admSelCatId=null;rAdmT();}
 
 function editT(tid){
   const t=C.tournaments.find(x=>x.id===tid);if(!t)return;
@@ -1196,7 +1174,11 @@ async function aSImg(input){const file=input.files[0];if(!file)return;const r=ne
 // USERS ADMIN (with search + ban)
 let userSearchQ='';
 async function rAdmU(){
-  ldr(true);const allUsers=await DB.get('zy_users','role=neq.admin&order=created_at.desc');C.users=allUsers;ldr(false);
+  ldr(true);
+  const allUsers=await DB.get('zy_users','role=neq.admin&order=created_at.desc');
+  C.users=allUsers;
+  ldr(false);
+  userSearchQ='';
   renderUserList();
 }
 function updateUserList(){
@@ -1306,9 +1288,23 @@ document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey
 
 <script>
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js')
-    .then(r => console.log('SW registered'))
-    .catch(e => console.log('SW error', e));
+  navigator.serviceWorker.register('sw.js').then(reg=>{
+    // Check for updates every 60 seconds
+    setInterval(()=>reg.update(), 60000);
+    // When new SW waiting, show update prompt
+    reg.addEventListener('updatefound', ()=>{
+      const newSW=reg.installing;
+      newSW.addEventListener('statechange', ()=>{
+        if(newSW.state==='installed'&&navigator.serviceWorker.controller){
+          // New version available - auto reload
+          newSW.postMessage({type:'SKIP_WAITING'});
+          navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+            window.location.reload();
+          });
+        }
+      });
+    });
+  }).catch(()=>{});
 }
 </script>
 </body>
