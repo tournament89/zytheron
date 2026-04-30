@@ -497,15 +497,9 @@ function showBanOverlay(u){
 // Track if beforeinstallprompt fired
 let installPromptReady = false;
 
-window.addEventListener('beforeinstallprompt', e => {
+window.addEventListener('beforeinstallprompt', function(e) {
   e.preventDefault();
   dPr = e;
-  installPromptReady = true;
-  // If install screen is showing, update the button to real install
-  const b = document.getElementById('andInst');
-  if (b && b.style.display !== 'none') {
-    b.innerHTML = '<button onclick="doInstall()" style="width:100%;padding:16px;background:var(--g2);color:#0a1228;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:10px">📲 Install App</button><div style="font-size:12px;color:var(--m)">Home screen-এ add হবে</div>';
-  }
 });
 
 window.addEventListener('appinstalled', () => {
@@ -539,8 +533,570 @@ function skipInstall() {
 }
 
 function initApp() {
-  // Skip install screen - go directly to app
-  const instEl = document.getElementById('instScr');
-  if (instEl) instEl.style.display = 'none';
+  var el = document.getElementById('instScr');
+  if (el) el.style.display = 'none';
   restoreSession();
-}>
+}
+  if (isIOS) {
+    // iOS - show Safari share instructions
+    document.getElementById('iosInst').style.display = 'block';
+  } else {
+    // Android/desktop - show install button
+    // beforeinstallprompt may not have fired yet, show button with fallback
+    document.getElementById('andInst').style.display = 'block';
+    // Wait a bit for beforeinstallprompt - if it fires, button updates automatically
+    // If not (already installed / not installable), show manual instructions after 2.5s
+    setTimeout(() => {
+      if (!installPromptReady && !isSA()) {
+        const b = document.getElementById('andInst');
+        if (b && document.getElementById('instScr').style.display !== 'none') {
+          b.innerHTML = '<div style="font-size:13px;color:var(--m);line-height:2.2;background:#0d1b3e;border-radius:10px;padding:14px;text-align:left">Chrome menu (⋮) চাপো<br>→ <b style="color:var(--g2)">&quot;Add to Home screen&quot;</b><br>→ <b style="color:var(--g2)">&quot;Add&quot;</b> ✅</div><button onclick="skipInstall()" style="width:100%;padding:12px;background:transparent;color:var(--m);border:1px solid #2a3d70;border-radius:10px;font-size:14px;cursor:pointer;margin-top:10px">Skip & Open App</button>';
+        }
+      }
+    }, 2500);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
+
+// ── SESSION
+async function restoreSession(){
+  // Check if user is still locked out
+  if(LA.until>Date.now()){
+    document.getElementById('scrAuth').className='scr on';
+    startCd(LA.until);
+    document.getElementById('loginErr').textContent='Too many failed attempts.';
+    document.getElementById('loginErr').style.display='block';
+    return;
+  }
+  const sv=localStorage.getItem('zy_sess');
+  if(!sv){document.getElementById('scrAuth').className='scr on';return;}
+  try{
+    const s=JSON.parse(sv);if(!s?.id){localStorage.removeItem('zy_sess');document.getElementById('scrAuth').className='scr on';return;}
+    ldr(true);
+    const rows=await DB.get('zy_users','id=eq.'+s.id);ldr(false);
+    if(!rows.length){localStorage.removeItem('zy_sess');document.getElementById('scrAuth').className='scr on';return;}
+    CU=rows[0];
+    if(chkBan(CU))return;
+    await loadAll();
+    if(CU.role==='admin')showScr('admin');else showScr('user');
+  }catch{localStorage.removeItem('zy_sess');ldr(false);document.getElementById('scrAuth').className='scr on';}
+}
+
+async function loadAll(){
+  try{
+    const[g,t,dep,w,ch,p,m]=await Promise.all([
+      DB.get('zy_games','order=sort_order'),
+      DB.get('zy_tournaments','order=created_at.desc'),
+      DB.get('zy_deposits','order=created_at.desc'),
+      DB.get('zy_withdrawals','order=created_at.desc'),
+      DB.get('zy_chats','order=created_at.asc'),
+      DB.get('zy_polls','order=created_at.desc'),
+      DB.get('zy_methods','order=sort_order')
+    ]);
+    [C.games,C.tournaments,C.deposits,C.withdrawals,C.chats,C.polls,C.methods]=[g,t,dep,w,ch,p,m];
+    if(CU){const f=await DB.get('zy_users','id=eq.'+CU.id);if(f?.length)CU=f[0];}
+  }catch(e){console.error(e);}
+}
+
+// ── AUTH
+function swTab(t){
+  document.getElementById('loginForm').style.display=t==='login'?'block':'none';
+  document.getElementById('signupForm').style.display=t==='signup'?'block':'none';
+  document.getElementById('tabL').className='tabbtn'+(t==='login'?' on':'');
+  document.getElementById('tabS').className='tabbtn'+(t==='signup'?' on':'');
+}
+function startCd(until){
+  const el=document.getElementById('loginCd'),btn=document.getElementById('loginBtn');
+  el.style.display='block';btn.disabled=true;
+  const tick=()=>{const r=Math.ceil((until-Date.now())/1000);if(r<=0){el.style.display='none';btn.disabled=false;return;}
+  const mn=Math.floor(r/60),s=r%60;el.textContent=`Try again in ${mn>0?mn+'m ':''}${s}s`;setTimeout(tick,500);};tick();
+}
+async function doLogin(){
+  if(LA.until>Date.now()){startCd(LA.until);return;}
+  const u=document.getElementById('lUser').value.trim(),p=document.getElementById('lPass').value;
+  if(!u||!p){toast('Fill all fields');return;}
+  ldr(true);
+  const rows=await DB.get('zy_users','email=eq.'+encodeURIComponent(u));
+  ldr(false);
+  const user=rows.find(x=>x.pass===p);
+  if(!user){LA.count++;const err=document.getElementById('loginErr');
+    if(LA.count>=3){LA.until=Date.now()+LOCKS[Math.min(LA.count-3,LOCKS.length-1)];saveLA();err.textContent='Wrong credentials. Try again later.';err.style.display='block';startCd(LA.until);}
+    else{err.textContent='Wrong username or password.';err.style.display='block';}saveLA();return;}
+  LA={count:0,until:0};saveLA();
+  document.getElementById('loginErr').style.display='none';
+  document.getElementById('loginCd').style.display='none';
+  document.getElementById('loginBtn').disabled=false;
+  if(chkBan(user))return;
+  CU=user;localStorage.setItem('zy_sess',JSON.stringify({id:user.id}));
+  await loadAll();
+  if(user.role==='admin')showScr('admin');else showScr('user');
+}
+let uT=null;
+function chkUname(inp){
+  clearTimeout(uT);const val=inp.value.trim(),msg=document.getElementById('unameErr');
+  if(val.length<3){msg.style.display='none';inp.classList.remove('err');return;}
+  if(val.toLowerCase()==='sabbir#049!'){inp.classList.add('err');msg.textContent='Username already taken.';msg.style.display='block';return;}
+  uT=setTimeout(async()=>{
+    const r=await DB.get('zy_users','username=eq.'+encodeURIComponent(val)+'&select=id');
+    if(r.length){inp.classList.add('err');msg.textContent='This username is already taken, give another name.';msg.style.display='block';}
+    else{inp.classList.remove('err');msg.style.display='none';}
+  },600);
+}
+async function doSignup(){
+  const name=document.getElementById('rName').value.trim(),email=document.getElementById('rEmail').value.trim(),
+    username=document.getElementById('rUser').value.trim(),pass=document.getElementById('rPass').value;
+  if(!name||!email||!username||!pass){toast('Fill all fields!');return;}
+  const em=document.getElementById('unameErr');if(em.style.display==='block'){toast('Fix errors first');return;}
+  if(username.toLowerCase()==='sabbir#049!'){toast('Username not allowed');return;}
+  ldr(true);
+  const ex=await DB.get('zy_users','username=eq.'+encodeURIComponent(username)+'&select=id');
+  if(ex.length){ldr(false);toast('Username already taken!');return;}
+  const nu={id:'U'+Date.now(),name,username,email,phone:'',pass,balance:0,joined:[],won:0,role:'user',txs:[],pic:null,ban_until:null,ban_reason:null,banned_game_ids:[]};
+  const res=await DB.ins('zy_users',nu);ldr(false);
+  if(!res){toast('Signup failed. Try again.');return;}
+  CU=Array.isArray(res)?res[0]:res;
+  localStorage.setItem('zy_sess',JSON.stringify({id:CU.id}));
+  await loadAll();showScr('user');
+}
+function doLogout(){
+  CU=null;selGId=null;admCUID=null;pendingJoinTid=null;
+  localStorage.removeItem('zy_sess');
+  if(autoRefT)clearInterval(autoRefT);if(tmrT)clearInterval(tmrT);if(banTimerInt)clearInterval(banTimerInt);
+  showScr('auth');
+}
+function showScr(s){
+  ['auth','user','admin'].forEach(x=>document.getElementById('scr'+x.charAt(0).toUpperCase()+x.slice(1)).className='scr'+(x===s?' on':''));
+  if(s==='user'){updTB();renderGG();showPg('home');startTimers();}
+  if(s==='admin'){swAdm('t');startTimers();startAR();}
+}
+function updTB(){
+  if(!CU)return;
+  document.getElementById('topBal').textContent='৳'+CU.balance;
+  const av=document.getElementById('uAv');
+  if(CU.pic)av.innerHTML=`<img src="${CU.pic}"/>`;else av.textContent=CU.name[0].toUpperCase();
+}
+function startAR(){
+  if(autoRefT)clearInterval(autoRefT);
+  autoRefT=setInterval(async()=>{
+    // Don't re-render if user is actively typing in an input/textarea
+    const activeEl=document.activeElement;
+    const isTyping=activeEl&&(activeEl.tagName==='INPUT'||activeEl.tagName==='TEXTAREA');
+    await loadAll();updDots();
+    if(!isTyping){
+      const m={t:rAdmT,g:rAdmG,w:rAdmW,d:rAdmD,s:rAdmS,u:rAdmU,p:rAdmP,x:rAdmX};
+      const k=['t','g','w','d','s','u','p','x'];
+      document.querySelectorAll('#ats .at2').forEach((el,i)=>{if(el.classList.contains('on')&&m[k[i]])m[k[i]]();});
+    }
+  },20000);
+}
+function updDots(){
+  document.getElementById('wdot').style.display=C.withdrawals.some(x=>x.status==='pending')?'inline-block':'none';
+  document.getElementById('ddot').style.display=C.deposits.some(x=>x.status==='pending')?'inline-block':'none';
+  document.getElementById('cdot').style.display=C.chats.some(m=>m.from_id!=='admin'&&!m.read_by_admin)?'inline-block':'none';
+}
+function startTimers(){
+  if(tmrT)clearInterval(tmrT);
+  tmrT=setInterval(()=>{
+    C.tournaments.forEach(t=>{
+      if(t.status==='upcoming'&&t.start_time){
+        const d=new Date(t.start_time)-Date.now();
+        if(d<=0){t.status='live';DB.upd('zy_tournaments','id=eq.'+t.id,{status:'live'});if(selGId)renderTL(selGId);}
+        else if(d<=300000&&!t.notified&&t.joined?.includes(CU?.id)){showBanner('⏰ '+t.name+' starts in 5 min!');t.notified=true;DB.upd('zy_tournaments','id=eq.'+t.id,{notified:true});}
+      }
+    });
+    C.polls.forEach(p=>{if(!p.ended&&p.end_time&&new Date(p.end_time)<=new Date()){p.ended=true;DB.upd('zy_polls','id=eq.'+p.id,{ended:true});}});
+  },10000);
+}
+
+// ── GAMES
+function renderGG(){
+  document.getElementById('gameGrid').innerHTML=C.games.filter(g=>g.active).map(g=>`<div class="gb${selGId===g.id?' sel':''}" onclick="selGame('${g.id}')"><div class="gi">${g.icon}</div><div class="gn">${g.name}</div></div>`).join('');
+  if(selGId){document.getElementById('tournSec').style.display='block';const g=C.games.find(x=>x.id===selGId);if(g)document.getElementById('tournTitle').textContent=g.icon+' '+g.name;}
+}
+function selGame(gid){selGId=gid;renderGG();document.getElementById('tournSec').style.display='block';const g=C.games.find(x=>x.id===gid);if(g)document.getElementById('tournTitle').textContent=g.icon+' '+g.name;renderTL(gid);setTimeout(()=>document.getElementById('tournSec').scrollIntoView({behavior:'smooth',block:'start'}),50);}
+function clearGame(){selGId=null;document.getElementById('tournSec').style.display='none';renderGG();}
+
+function renderTL(gid){
+  const ts=C.tournaments.filter(t=>t.game_id===gid);
+  document.getElementById('winSec').innerHTML=ts.filter(t=>t.winner).map(t=>`<div class="wbar"><span style="font-size:22px">🏆</span><div><div style="font-size:14px;font-weight:700;color:#4dde80">${t.name}</div><div style="font-size:12px;color:#2aad50">🥇 ${t.winner}</div></div></div>`).join('');
+  const el=document.getElementById('tList');
+  if(!ts.length){el.innerHTML='<div class="empty">No tournaments yet</div>';return;}
+  el.innerHTML=ts.map(t=>{
+    const joined=t.joined?.includes(CU?.id),full=t.joined?.length>=t.max_players,pct=Math.round((t.joined?.length||0)/t.max_players*100);
+    let timer='';if(t.start_time&&t.status==='upcoming'){const d=new Date(t.start_time)-Date.now();if(d>0){const h=Math.floor(d/3600000),m=Math.floor((d%3600000)/60000);timer=`<span style="font-size:12px;color:var(--g3)">⏰ ${h}h ${m}m</span>`;}}
+    const needsId=t.require_game_id;
+    return`<div class="tc"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="font-size:15px;font-weight:700">${t.name}</div><span class="badge b${t.status==='live'?'l':t.status==='closed'?'c':'u'}">${t.status.toUpperCase()}</span></div>
+    <div style="font-size:13px;color:var(--m);margin-top:5px;line-height:1.5">${t.description||''}</div>
+    ${needsId?'<div style="font-size:11px;color:var(--g3);margin-top:4px">ℹ️ Game ID required to join</div>':''}
+    <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div>
+    <div style="display:flex;gap:10px;margin-top:7px;flex-wrap:wrap"><span style="font-size:12px;color:var(--m)">💰 <b style="color:var(--w)">৳${t.fee}</b></span><span style="font-size:12px;color:var(--m)">👥 <b style="color:var(--w)">${t.joined?.length||0}/${t.max_players}</b></span>${timer}</div>
+    <div style="display:flex;gap:8px;margin-top:10px">${joined?'<span class="jtag">✅ Joined</span>':full?'<button class="bsm bmu" disabled>Full</button>':`<button class="bsm bj" onclick="startJoin('${t.id}')">Join ৳${t.fee}</button>`}<button class="bsm bo" onclick="viewT('${t.id}')">Details</button></div></div>`;
+  }).join('');
+}
+
+// ── JOIN FLOW (with optional game ID)
+function startJoin(tid){
+  const t=C.tournaments.find(x=>x.id===tid);if(!t)return;
+  if(t.require_game_id){
+    pendingJoinTid=tid;
+    document.getElementById('joinTitle').innerHTML=`Join: ${t.name}<button class="mx" onclick="closeMo('joinMo')">✕</button>`;
+    document.getElementById('joinIdLabel').textContent=t.game_id_label||'Game ID / Username';
+    document.getElementById('joinGameId').value='';
+    openMo('joinMo');
+  }else{execJoin(tid,null);}
+}
+async function confirmJoin(){
+  const gid=document.getElementById('joinGameId').value.trim();
+  if(!gid){toast('Game ID দাও');return;}
+  closeMo('joinMo');
+  await execJoin(pendingJoinTid,gid);
+}
+async function execJoin(tid,gameId){
+  const t=C.tournaments.find(x=>x.id===tid);if(!t)return;
+  if(CU.balance<t.fee){toast('Balance কম! Deposit করো।');return;}
+  ldr(true);
+  const newBal=CU.balance-t.fee;
+  const newJT=[...(t.joined||[]),CU.id];
+  const newJU=[...(CU.joined||[]),tid];
+  const newTxs=[{type:'Joined: '+t.name,amount:t.fee,dir:'out',date:new Date().toLocaleDateString(),status:'approved'},...(CU.txs||[])];
+  // Store player info with game ID
+  const playerInfo=t.player_info||{};
+  playerInfo[CU.id]={username:CU.username,name:CU.name,gameId:gameId||null,joinedAt:new Date().toISOString()};
+  await Promise.all([
+    DB.upd('zy_tournaments','id=eq.'+tid,{joined:newJT,player_info:playerInfo}),
+    DB.upd('zy_users','id=eq.'+CU.id,{balance:newBal,joined:newJU,txs:newTxs})
+  ]);
+  t.joined=newJT;t.player_info=playerInfo;CU.balance=newBal;CU.joined=newJU;CU.txs=newTxs;
+  ldr(false);toast('Joined '+t.name+'!');renderTL(selGId);updTB();
+}
+
+function viewT(tid){
+  const t=C.tournaments.find(x=>x.id===tid);if(!t)return;
+  const isJ=t.joined?.includes(CU?.id);
+  let rHtml='';
+  if(isJ){
+    if(t.room_id||t.room_pass){rHtml=`<div class="rbox2">${t.room_id?`<div style="font-size:11px;color:var(--m);margin-bottom:3px">Room ID</div><div style="font-size:15px;font-weight:700;color:var(--g2)">${t.room_id}</div>`:''} ${t.room_pass?`<div style="font-size:11px;color:var(--m);margin-top:8px;margin-bottom:3px">Room Password</div><div style="font-size:15px;font-weight:700;color:var(--g2)">${t.room_pass}</div>`:''}</div>`;}
+    else if(t.status!=='closed'){rHtml='<div class="rbox2"><div style="font-size:12px;color:var(--m);font-style:italic">⏳ Room info টা tournament শুরুর 3-4 মিনিট আগে দেওয়া হবে।</div></div>';}
+  }
+  document.getElementById('tdTitle').innerHTML=`🎮 ${t.name}<button class="mx" onclick="closeMo('tdMo')">✕</button>`;
+  document.getElementById('tdBody').innerHTML=`<span class="badge b${t.status==='live'?'l':t.status==='closed'?'c':'u'}">${t.status.toUpperCase()}</span>
+  <div style="margin:10px 0;font-size:13px;color:var(--m);line-height:1.6">${t.description||''}</div><div class="dvd"></div>
+  ${[['Entry Fee','৳'+t.fee],['Players',(t.joined?.length||0)+'/'+t.max_players],t.start_time?['Starts',new Date(t.start_time).toLocaleString()]:null,t.winner?['🏆 Winner',t.winner]:null].filter(Boolean).map(([k,v])=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid #1e2a4a"><span style="color:var(--m)">${k}</span><b>${v}</b></div>`).join('')}${rHtml}`;
+  openMo('tdMo');
+}
+
+// ── WALLET
+function renderWallet(){
+  updTB();document.getElementById('wBal').textContent=CU.balance;document.getElementById('stB').textContent=CU.balance;
+  const txs=CU.txs||[];
+  document.getElementById('txList').innerHTML=txs.length?txs.slice(0,30).map(tx=>{let sb='';if(tx.status&&tx.status!=='approved')sb=` <span class="badge b${tx.status==='pending'?'p':'rj'}" style="font-size:10px">${tx.status.toUpperCase()}</span>`;return`<div class="txr"><div><div style="font-size:13px;font-weight:600">${tx.type}${sb}</div><div style="font-size:11px;color:var(--m)">${tx.date}</div></div><div class="t${tx.dir==='in'?'p':'m'}">${tx.dir==='in'?'+':'-'}৳${tx.amount}</div></div>`;}).join(''):'<div class="empty">No transactions yet</div>';
+}
+function bMG(gid,bid,type){
+  document.getElementById(bid).style.display='none';
+  document.getElementById(gid).innerHTML=C.methods.length?C.methods.map(m=>`<div class="mopt" data-id="${m.id}" onclick="selM('${m.id}','${type}')">${m.name}</div>`).join(''):'<div style="color:var(--m);font-size:13px;grid-column:1/-1">No methods</div>';
+}
+function selM(mid,type){
+  const m=C.methods.find(x=>x.id===mid);if(!m)return;
+  document.getElementById(type==='dep'?'depMG':'withMG').querySelectorAll('.mopt').forEach(x=>x.classList.toggle('sel',x.dataset.id===mid));
+  if(type==='dep'){selDM=m;document.getElementById('depNum').textContent=m.num;document.getElementById('depRules').textContent=m.rules||'';}
+  else{selWM=m;document.getElementById('withRules').textContent=m.rules||'';}
+  document.getElementById(type==='dep'?'depMB':'withMB').style.display='block';
+}
+async function submitDep(){
+  const amt=parseInt(document.getElementById('depAmt').value),acc=document.getElementById('depAcc').value.trim(),tx=document.getElementById('depTx').value.trim();
+  if(!selDM){toast('Method select করো');return;}if(!amt||amt<10){toast('Minimum ৳10');return;}if(!acc){toast('Account number দাও');return;}if(!tx){toast('Transaction ID দাও');return;}
+  ldr(true);const dep={id:'D'+Date.now(),user_id:CU.id,user_name:CU.name,phone:CU.phone,amount:amt,method:selDM.name,account:acc,txid:tx,req_date:new Date().toLocaleDateString(),status:'pending'};
+  await DB.ins('zy_deposits',dep);
+  const nTx=[{type:'Deposit Request ('+selDM.name+')',amount:amt,dir:'in',date:new Date().toLocaleDateString(),status:'pending'},...(CU.txs||[])];
+  await DB.upd('zy_users','id=eq.'+CU.id,{txs:nTx});CU.txs=nTx;C.deposits.unshift(dep);ldr(false);closeMo('depMo');toast('Submitted!');
+}
+async function submitWith(){
+  const amt=parseInt(document.getElementById('withAmt').value),acc=document.getElementById('withAcc').value.trim();
+  if(!selWM){toast('Method select করো');return;}if(!amt||amt<30){toast('Minimum ৳30');return;}if(CU.balance<amt){toast('Balance insufficient!');return;}if(!acc){toast('Account number দাও');return;}
+  ldr(true);const wd={id:'W'+Date.now(),user_id:CU.id,user_name:CU.name,phone:CU.phone,amount:amt,method:selWM.name,account:acc,req_date:new Date().toLocaleDateString(),status:'pending'};
+  await DB.ins('zy_withdrawals',wd);
+  const nTx=[{type:'Withdrawal Request ('+selWM.name+')',amount:amt,dir:'out',date:new Date().toLocaleDateString(),status:'pending'},...(CU.txs||[])];
+  await DB.upd('zy_users','id=eq.'+CU.id,{txs:nTx});CU.txs=nTx;C.withdrawals.unshift(wd);ldr(false);closeMo('withMo');toast('Submitted!');
+}
+
+// ── VOTING
+function renderVoting(){
+  const polls=C.polls.filter(p=>!p.ended);const el=document.getElementById('voteList');
+  if(!polls.length){el.innerHTML='<div class="empty">No active polls</div>';return;}
+  const L=['a','b','c','d','e'];
+  el.innerHTML=polls.map(p=>{const v=p.votes||[];const tot=v.reduce((a,b)=>a+b,0)||1;const voted=(p.voted_by||[]).includes(CU.id);
+    let tl='';if(p.end_time){const d=new Date(p.end_time)-Date.now();if(d>0){const h=Math.floor(d/3600000),m=Math.floor((d%3600000)/60000);tl=`<div style="font-size:11px;color:var(--g3);margin-bottom:8px">⏰ ${h}h ${m}m</div>`;}}
+    return`<div class="vcard"><div style="font-size:14px;font-weight:600;margin-bottom:10px">${p.question}</div>${tl}${(p.opts||[]).map((o,i)=>{const pct=Math.round((v[i]||0)/tot*100);return`<div class="vopt${voted&&(v[i]||0)===Math.max(...v)?' pk':''}" onclick="castVote('${p.id}',${i})"><div class="vbar" style="width:${voted?pct:0}%"></div><span class="vl">${L[i]})</span><span class="vt">${o}</span>${voted?`<span class="vpc">${pct}%</span>`:''}</div>`;}).join('')}</div>`;
+  }).join('');
+}
+async function castVote(pid,i){const p=C.polls.find(x=>x.id===pid);if(!p||p.ended||(p.voted_by||[]).includes(CU.id)){toast('Already voted!');return;}const nv=[...(p.votes||[])];nv[i]=(nv[i]||0)+1;const nvb=[...(p.voted_by||[]),CU.id];p.votes=nv;p.voted_by=nvb;await DB.upd('zy_polls','id=eq.'+pid,{votes:nv,voted_by:nvb});renderVoting();}
+
+// ── SUPPORT
+function renderUChat(){
+  const msgs=C.chats.filter(m=>m.user_id===CU.id);const el=document.getElementById('uChatMsgs');
+  if(!msgs.length){el.innerHTML='<div style="color:var(--m);font-size:13px;text-align:center;padding:20px">👋 Message পাঠাও।</div>';return;}
+  el.innerHTML=msgs.map(m=>{const isMe=m.from_id===CU.id;return`<div class="mr ${isMe?'me':'them'}"><div class="bub ${isMe?'me':'them'}">${m.img?`<img src="${m.img}" onclick="viewImg(this.src)"/>`:''}<span>${m.msg||''}</span></div><div class="mtime">${isMe?'You':'Support'} · ${m.sent_at}</div></div>`;}).join('');
+  el.scrollTop=el.scrollHeight;
+}
+async function uSendMsg(){const inp=document.getElementById('uChatInp');const txt=inp.value.trim();if(!txt)return;const msg={id:'M'+Date.now(),user_id:CU.id,user_name:CU.name,phone:CU.phone,from_id:CU.id,msg:txt,img:null,sent_at:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),read_by_admin:false};C.chats.push(msg);inp.value='';renderUChat();await DB.ins('zy_chats',msg);}
+async function uSendImg(input){const file=input.files[0];if(!file)return;const r=new FileReader();r.onload=async e=>{const c=await cmpImg(e.target.result,400,.7);const msg={id:'M'+Date.now(),user_id:CU.id,user_name:CU.name,phone:CU.phone,from_id:CU.id,msg:'',img:c,sent_at:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),read_by_admin:false};C.chats.push(msg);renderUChat();await DB.ins('zy_chats',msg);};r.readAsDataURL(file);input.value='';}
+function cmpImg(src,mx,q){return new Promise(res=>{const i=new Image();i.onload=()=>{const r=Math.min(mx/i.width,mx/i.height,1);const c=document.createElement('canvas');c.width=i.width*r;c.height=i.height*r;c.getContext('2d').drawImage(i,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',q));};i.src=src;});}
+
+// ── PROFILE
+async function renderProfile(){const f=await DB.get('zy_users','id=eq.'+CU.id);if(f?.length)CU=f[0];const av=document.getElementById('profAv');if(CU.pic)av.innerHTML=`<img src="${CU.pic}"/><div class="cov">📷</div>`;else av.innerHTML=`<span>${CU.name[0].toUpperCase()}</span><div class="cov">📷</div>`;document.getElementById('profName').textContent=CU.name;document.getElementById('profUname').textContent='@'+CU.username;document.getElementById('stJ').textContent=(CU.joined||[]).length;document.getElementById('stW').textContent=CU.won||0;document.getElementById('stB').textContent=CU.balance;}
+async function chgPic(input){const file=input.files[0];if(!file)return;const r=new FileReader();r.onload=async e=>{const c=await cmpImg(e.target.result,200,.75);await DB.upd('zy_users','id=eq.'+CU.id,{pic:c});CU.pic=c;renderProfile();updTB();toast('Profile pic updated!');};r.readAsDataURL(file);input.value='';}
+function doShare(){const url='https://tournament89.github.io/zytheron';if(navigator.share)navigator.share({title:'Zytheron',text:'Join Zytheron! 🏆',url});else if(navigator.clipboard){navigator.clipboard.writeText(url);toast('Link copied!');}else toast(url);}
+
+// ── PAGE SWITCHER
+async function showPg(p){
+  ['home','wallet','voting','support','profile'].forEach(x=>{document.getElementById('pg'+x.charAt(0).toUpperCase()+x.slice(1)).className=x===p?'':'ph';document.getElementById('ni-'+x).className='ni'+(x===p?' on':'');});
+  document.getElementById('uPgW').scrollTop=0;
+  if(p==='wallet'){const f=await DB.get('zy_users','id=eq.'+CU.id);if(f?.length)CU=f[0];renderWallet();}
+  if(p==='voting')renderVoting();
+  if(p==='support')renderUChat();
+  if(p==='profile')renderProfile();
+  if(p==='home')renderGG();
+}
+
+// ── ADMIN
+const AK=['t','g','w','d','s','u','p','x'];
+const AM={t:rAdmT,g:rAdmG,w:rAdmW,d:rAdmD,s:rAdmS,u:rAdmU,p:rAdmP,x:rAdmX};
+function swAdm(tab){document.querySelectorAll('#ats .at2').forEach((el,i)=>el.className='at2'+(AK[i]===tab?' on':''));if(AM[tab])AM[tab]();updDots();}
+
+// TOURNAMENTS ADMIN
+function rAdmT(){
+  const gs=C.games.filter(g=>g.active);const ts=C.tournaments;
+  document.getElementById('admC').innerHTML=`<div class="af"><div class="aft">➕ Add Tournament</div>
+    <span class="ilbl">Game</span><select class="inp" id="tG" style="margin-bottom:8px">${gs.map(g=>`<option value="${g.id}">${g.icon} ${g.name}</option>`).join('')}</select>
+    <input class="inp" id="tN" placeholder="Tournament Name" autocomplete="off" name="tournament_name_field"/>
+    <div class="irow"><div><span class="ilbl">Entry Fee (৳)</span><input class="inp" id="tF" type="number" placeholder="50" style="margin:0" autocomplete="off"/></div><div><span class="ilbl">Max Players</span><input class="inp" id="tMx" type="number" placeholder="16" style="margin:0" autocomplete="off"/></div></div>
+    <div class="irow" style="margin-top:8px"><div><span class="ilbl">Start Time</span><input class="inp" id="tT" type="datetime-local" style="margin:0"/></div><div></div></div>
+    <textarea class="inp" id="tD" placeholder="Description..." style="margin:8px 0"></textarea>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--w)"><input type="checkbox" id="tRI" style="width:16px;height:16px"/> Require Game ID</label></div>
+    <div id="tRIBox" style="display:none;margin-bottom:8px"><span class="ilbl">Game ID Field Label</span><input class="inp" id="tRIL" placeholder="e.g. PUBG ID, Ludo Username" style="margin-bottom:0"/></div>
+    <button class="bgold" style="width:auto;padding:10px 26px" onclick="admAddT()">Add</button></div>
+  <div class="sec">Existing</div>
+  ${ts.length?ts.map(t=>{const g=C.games.find(x=>x.id===t.game_id);return`<div class="rc">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div style="flex:1"><div class="ru">${t.name}</div><div class="rd">${g?g.icon+' '+g.name:'?'} · ${t.joined?.length||0}/${t.max_players} · ৳${t.fee}</div>${t.start_time?`<div class="rd">⏰ ${new Date(t.start_time).toLocaleString()}</div>`:''}</div><span class="badge b${t.status==='live'?'l':t.status==='closed'?'c':'u'}">${t.status.toUpperCase()}</span></div>
+    <div class="dvd" style="margin:8px 0"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px"><div><span class="ilbl">Room ID</span><input class="inp" id="rid_${t.id}" value="${t.room_id||''}" placeholder="Room ID" style="margin:0"/></div><div><span class="ilbl">Room Password</span><input class="inp" id="rp_${t.id}" value="${t.room_pass||''}" placeholder="Password" style="margin:0"/></div></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--m)"><input type="checkbox" ${t.require_game_id?'checked':''} onchange="togRGI('${t.id}',this.checked)"/> Require Game ID</label></div>
+    <div class="raf">
+      <button class="bsm bs" onclick="saveRoom('${t.id}')">💾 Save Room</button>
+      <button class="bsm bo" onclick="togTS('${t.id}')">Toggle Status</button>
+      <button class="bsm bo" onclick="viewPlayers('${t.id}')">👥 Players</button>
+      <button class="bsm bd" onclick="delT('${t.id}')">Remove</button>
+    </div></div>`;}).join(''):'<div class="empty">No tournaments</div>'}`;
+  document.getElementById('tRI').addEventListener('change',function(){document.getElementById('tRIBox').style.display=this.checked?'block':'none';});
+}
+async function saveRoom(tid){const rid=document.getElementById('rid_'+tid).value.trim()||null,rp=document.getElementById('rp_'+tid).value.trim()||null;await DB.upd('zy_tournaments','id=eq.'+tid,{room_id:rid,room_pass:rp});const t=C.tournaments.find(x=>x.id===tid);if(t){t.room_id=rid;t.room_pass=rp;}toast('Saved!');}
+async function togRGI(tid,val){await DB.upd('zy_tournaments','id=eq.'+tid,{require_game_id:val});const t=C.tournaments.find(x=>x.id===tid);if(t)t.require_game_id=val;toast(val?'Game ID required ON':'Game ID required OFF');}
+async function admAddT(){
+  const name=document.getElementById('tN').value.trim(),gid=document.getElementById('tG').value;if(!name){toast('Name required');return;}
+  const needId=document.getElementById('tRI').checked,idLabel=document.getElementById('tRIL').value.trim();
+  const t={id:'T'+Date.now(),name,game_id:gid,fee:parseInt(document.getElementById('tF').value)||0,max_players:parseInt(document.getElementById('tMx').value)||16,joined:[],status:'upcoming',description:document.getElementById('tD').value,start_time:document.getElementById('tT').value?new Date(document.getElementById('tT').value).toISOString():null,winner:null,room_id:null,room_pass:null,notified:false,require_game_id:needId,game_id_label:idLabel||'Game ID',player_info:{}};
+  ldr(true);await DB.ins('zy_tournaments',t);C.tournaments.unshift(t);ldr(false);
+  ['tN','tF','tMx','tD','tRIL'].forEach(id=>document.getElementById(id).value='');document.getElementById('tRI').checked=false;document.getElementById('tRIBox').style.display='none';
+  toast('Added!');rAdmT();
+}
+async function togTS(tid){const t=C.tournaments.find(x=>x.id===tid);if(!t)return;t.status=t.status==='upcoming'?'live':t.status==='live'?'closed':'upcoming';await DB.upd('zy_tournaments','id=eq.'+tid,{status:t.status});rAdmT();}
+async function delT(tid){
+  // On delete, clear player_info to free cache but preserve ban history
+  await DB.del('zy_tournaments','id=eq.'+tid);C.tournaments=C.tournaments.filter(x=>x.id!==tid);rAdmT();toast('Removed');
+}
+
+// VIEW PLAYERS
+async function viewPlayers(tid){
+  const t=C.tournaments.find(x=>x.id===tid);if(!t)return;
+  const playerInfo=t.player_info||{};
+  const uids=Object.keys(playerInfo);
+  // Fetch banned IDs from global store
+  const bannedIds=JSON.parse(localStorage.getItem('zy_banned_ids')||'[]');
+  ldr(true);
+  let users=[];
+  if(uids.length){users=await DB.get('zy_users','id=in.('+uids.join(',')+')');}
+  ldr(false);
+  const el=document.getElementById('admC');
+  el.innerHTML=`<div class="backbtn" onclick="rAdmT()">← Tournaments</div>
+  <div style="font-size:15px;font-weight:700;margin-bottom:4px">${t.name}</div>
+  <div class="rd" style="margin-bottom:14px">${uids.length} players joined</div>
+  ${uids.length?uids.map(uid=>{
+    const pi=playerInfo[uid];const u=users.find(x=>x.id===uid);
+    const uname=pi.username||u?.username||uid;
+    const wasBanned=u?.previously_banned;
+    const gameId=pi.gameId;
+    const idWasBanned=gameId&&bannedIds.includes(gameId);
+    return`<div class="rc player-row">
+      <div style="flex:1">
+        <div class="player-name">${uname}${wasBanned?'<span class="ban-tag">previously banned</span>':''}</div>
+        ${gameId?`<div class="player-id">ID: ${gameId}${idWasBanned?'<span class="id-ban-tag">this id was banned</span>':''}</div>`:''}
+        <div style="font-size:11px;color:var(--m)">${pi.joinedAt?new Date(pi.joinedAt).toLocaleDateString():''}</div>
+      </div>
+      <button class="bsm bban" onclick="kickPlayer('${tid}','${uid}',${t.fee})">Kick</button>
+    </div>`;
+  }).join(''):'<div class="empty">No players yet</div>'}`;
+}
+
+async function kickPlayer(tid,uid,fee){
+  if(!confirm('Kick this player? Entry fee will be refunded.'))return;
+  const t=C.tournaments.find(x=>x.id===tid);if(!t)return;
+  ldr(true);
+  // Remove from joined list and player_info
+  const newJ=(t.joined||[]).filter(x=>x!==uid);
+  const pi={...t.player_info};delete pi[uid];
+  await DB.upd('zy_tournaments','id=eq.'+tid,{joined:newJ,player_info:pi});
+  t.joined=newJ;t.player_info=pi;
+  // Refund entry fee
+  const ur=await DB.get('zy_users','id=eq.'+uid);
+  if(ur.length){const u=ur[0];const txs=u.txs||[];txs.unshift({type:'Kicked from: '+t.name+' (Refund)',amount:fee,dir:'in',date:new Date().toLocaleDateString(),status:'approved'});await DB.upd('zy_users','id=eq.'+uid,{balance:u.balance+fee,txs});}
+  // Remove from user's joined list
+  const ur2=await DB.get('zy_users','id=eq.'+uid);if(ur2.length){const u2=ur2[0];await DB.upd('zy_users','id=eq.'+uid,{joined:(u2.joined||[]).filter(x=>x!==tid)});}
+  ldr(false);toast('Player kicked & refunded!');viewPlayers(tid);
+}
+
+// GAMES ADMIN
+function rAdmG(){document.getElementById('admC').innerHTML=`<div class="af"><div class="aft">➕ Add Game</div><div class="irow"><div><span class="ilbl">Name</span><input class="inp" id="gN" placeholder="Ludo" style="margin:0" autocomplete="off"/></div><div><span class="ilbl">Icon</span><input class="inp" id="gI" placeholder="🎲" style="margin:0" autocomplete="off"/></div></div><button class="bgold" style="width:auto;padding:9px 22px;margin-top:9px" onclick="admAddG()">Add</button></div><div class="sec">All Games</div>${C.games.map(g=>`<div class="rc" style="display:flex;align-items:center;justify-content:space-between"><div style="display:flex;align-items:center;gap:12px"><span style="font-size:26px">${g.icon}</span><div><div class="ru">${g.name}</div><div class="rd">${g.active?'✅ Active':'🔴 Hidden'}</div></div></div><div style="display:flex;gap:7px"><button class="bsm ${g.active?'bmu':'bs'}" onclick="togG('${g.id}')">${g.active?'Hide':'Show'}</button><button class="bsm bd" onclick="delG('${g.id}')">✕</button></div></div>`).join('')}`;}
+async function admAddG(){const n=document.getElementById('gN').value.trim(),i=document.getElementById('gI').value.trim();if(!n||!i){toast('Name & icon required');return;}const g={id:'G'+Date.now(),name:n,icon:i,active:true,sort_order:C.games.length+1};ldr(true);await DB.ins('zy_games',g);C.games.push(g);ldr(false);document.getElementById('gN').value='';document.getElementById('gI').value='';toast('Added!');rAdmG();}
+async function togG(gid){const g=C.games.find(x=>x.id===gid);if(g){g.active=!g.active;await DB.upd('zy_games','id=eq.'+gid,{active:g.active});}rAdmG();}
+async function delG(gid){await DB.del('zy_games','id=eq.'+gid);C.games=C.games.filter(x=>x.id!==gid);rAdmG();toast('Removed');}
+
+// WITHDRAWALS ADMIN
+function rAdmW(){const wds=C.withdrawals;document.getElementById('wdot').style.display=wds.some(x=>x.status==='pending')?'inline-block':'none';document.getElementById('admC').innerHTML=`<div class="sec">💸 Withdrawals</div>`+(wds.length?wds.map(w=>`<div class="rc"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="ru">${w.user_name}</div><div class="rd">📱 ${w.method}: <b style="color:var(--w)">${w.account}</b></div><div class="rd">📞 ${w.phone||'-'} · 📅 ${w.req_date}</div></div><div style="text-align:right"><div class="ra">৳${w.amount}</div><span class="badge b${w.status==='approved'?'ap':w.status==='rejected'?'rj':'p'}">${w.status.toUpperCase()}</span></div></div>${w.status==='pending'?`<div class="raf"><button class="bsm bs" onclick="appW('${w.id}')">✅ Approve</button><button class="bsm bd" onclick="rejW('${w.id}')">❌ Reject</button></div>`:''}</div>`).join(''):'<div class="empty">No requests</div>');}
+async function appW(wid){const w=C.withdrawals.find(x=>x.id===wid);if(!w)return;ldr(true);w.status='approved';const ur=await DB.get('zy_users','id=eq.'+w.user_id);if(ur.length){const u=ur[0];const nb=Math.max(0,u.balance-w.amount);const txs=u.txs||[];const tx=txs.find(t=>t.type==='Withdrawal Request ('+w.method+')'&&t.status==='pending');if(tx)tx.status='approved';await DB.upd('zy_users','id=eq.'+w.user_id,{balance:nb,txs});}await DB.upd('zy_withdrawals','id=eq.'+wid,{status:'approved'});ldr(false);toast('Approved!');rAdmW();}
+async function rejW(wid){const w=C.withdrawals.find(x=>x.id===wid);if(!w)return;w.status='rejected';await DB.upd('zy_withdrawals','id=eq.'+wid,{status:'rejected'});toast('Rejected');rAdmW();}
+
+// DEPOSITS ADMIN
+function rAdmD(){const deps=C.deposits;document.getElementById('ddot').style.display=deps.some(x=>x.status==='pending')?'inline-block':'none';document.getElementById('admC').innerHTML=`<div class="sec">💰 Deposits</div>${deps.length?deps.map(d=>`<div class="rc"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="ru">${d.user_name}</div><div class="rd">📱 ${d.method}: <b style="color:var(--w)">${d.account}</b></div><div class="rd">🔖 TxID: <b style="color:var(--g3)">${d.txid||'-'}</b></div><div class="rd">📅 ${d.req_date}</div></div><div style="text-align:right"><div class="ra">৳${d.amount}</div><span class="badge b${d.status==='approved'?'ap':d.status==='rejected'?'rj':'p'}">${d.status.toUpperCase()}</span></div></div>${d.status==='pending'?`<div class="raf"><button class="bsm bs" onclick="appD('${d.id}')">✅ Verify</button><button class="bsm bd" onclick="rejD('${d.id}')">❌ Reject</button></div>`:''}</div>`).join(''):'<div class="empty">No requests</div>'}<div class="dvd"></div><div class="sec" style="font-size:14px">⚙️ Payment Methods</div><div class="af">${C.methods.map(m=>`<div class="rc" style="margin-bottom:7px;padding:10px 13px;display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:600">${m.name}</div><div class="rd">${m.num}</div></div><button class="bsm bd" onclick="delM('${m.id}')">✕</button></div>`).join('')||'<div style="color:var(--m);font-size:13px;margin-bottom:9px">No methods</div>'}<div class="dvd"></div><div class="aft" style="font-size:13px;margin-bottom:9px">Add Method</div><div class="irow"><div><span class="ilbl">Name</span><input class="inp" id="mN" placeholder="BKash" style="margin:0" autocomplete="off"/></div><div><span class="ilbl">Number</span><input class="inp" id="mNum" placeholder="01XXXXXXXXX" style="margin:0" autocomplete="off"/></div></div><textarea class="inp" id="mR" placeholder="Instructions..." style="margin:8px 0"></textarea><button class="bgold" style="width:auto;padding:9px 22px" onclick="saveM()">Save</button></div>`;}
+async function appD(did){const d=C.deposits.find(x=>x.id===did);if(!d)return;ldr(true);d.status='approved';const ur=await DB.get('zy_users','id=eq.'+d.user_id);if(ur.length){const u=ur[0];const nb=u.balance+d.amount;const txs=u.txs||[];const tx=txs.find(t=>t.type==='Deposit Request ('+d.method+')'&&t.status==='pending');if(tx)tx.status='approved';await DB.upd('zy_users','id=eq.'+d.user_id,{balance:nb,txs});}await DB.upd('zy_deposits','id=eq.'+did,{status:'approved'});ldr(false);toast('৳'+d.amount+' credited!');rAdmD();}
+async function rejD(did){const d=C.deposits.find(x=>x.id===did);if(!d)return;d.status='rejected';await DB.upd('zy_deposits','id=eq.'+did,{status:'rejected'});toast('Rejected');rAdmD();}
+async function saveM(){const n=document.getElementById('mN').value.trim(),num=document.getElementById('mNum').value.trim(),rules=document.getElementById('mR').value.trim();if(!n||!num){toast('Name & number required');return;}const m={id:'M'+Date.now(),name:n,num,rules,sort_order:C.methods.length+1};ldr(true);await DB.ins('zy_methods',m);C.methods.push(m);ldr(false);['mN','mNum','mR'].forEach(id=>document.getElementById(id).value='');toast('Saved!');rAdmD();}
+async function delM(mid){await DB.del('zy_methods','id=eq.'+mid);C.methods=C.methods.filter(x=>x.id!==mid);rAdmD();}
+
+// SUPPORT ADMIN
+function rAdmS(){
+  const msgs=C.chats;const unr=new Set(msgs.filter(m=>m.from_id!=='admin'&&!m.read_by_admin).map(m=>m.user_id));
+  document.getElementById('cdot').style.display=unr.size>0?'inline-block':'none';
+  const uids=[...new Set(msgs.map(m=>m.user_id))];
+  if(admCUID){
+    const u=C.users.find(x=>x.id===admCUID)||{name:'User',phone:'-',username:'-'};
+    document.getElementById('admC').innerHTML=`<div class="backbtn" onclick="admCUID=null;rAdmS()">← All Chats</div>
+    <div style="margin-bottom:10px"><div style="font-size:15px;font-weight:700">${u.name}</div><div style="font-size:12px;color:var(--g3)">📞 ${u.phone||'-'} · @${u.username}</div></div>
+    <div class="achat" id="aCB"></div>
+    <div style="display:flex;gap:8px;margin-top:9px;align-items:flex-end">
+      <label class="imgbtn">📷<input type="file" accept="image/*" style="display:none" onchange="aSImg(this)"/></label>
+      <textarea class="inp" style="flex:1;margin:0;font-size:13px;resize:none" id="aCI" placeholder="Reply..." rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();aReply()}"></textarea>
+      <button class="csend" onclick="aReply()">➤</button>
+    </div>`;
+    rAChatMsgs();return;
+  }
+  DB.get('zy_users','select=id,name,username,phone,pic').then(u=>{C.users=u;});
+  document.getElementById('admC').innerHTML=`<div class="sec">💬 Support</div>`+(uids.length?uids.map(uid=>{const u=C.users.find(x=>x.id===uid)||{name:uid,phone:'-'};const um=msgs.filter(m=>m.user_id===uid);const last=um[um.length-1];const unread=um.filter(m=>m.from_id!=='admin'&&!m.read_by_admin).length;return`<div class="tcard${unread?' unread':''}" onclick="admCUID='${uid}';rAdmS()"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px"><div style="font-weight:600;font-size:14px">${u.name}${unread?`<span class="ubadge">${unread} new</span>`:''}</div><span style="font-size:11px;color:var(--m)">${last?.sent_at||''}</span></div><div style="font-size:12px;color:var(--m)">${last?.msg||'📷 Image'}</div><div style="font-size:11px;color:var(--g3);margin-top:3px">📞 ${u.phone||'-'}</div></div>`;}).join(''):'<div class="empty">No messages</div>');
+}
+async function rAChatMsgs(){const all=C.chats;all.filter(m=>m.user_id===admCUID&&m.from_id!=='admin'&&!m.read_by_admin).forEach(m=>{m.read_by_admin=true;DB.upd('zy_chats','id=eq.'+m.id,{read_by_admin:true});});const msgs=all.filter(m=>m.user_id===admCUID);const el=document.getElementById('aCB');if(!el)return;el.innerHTML=msgs.length?msgs.map(m=>{const isA=m.from_id==='admin';return`<div class="ar ${isA?'adm':'usr'}"><div class="ab2 ${isA?'adm':'usr'}">${m.img?`<img src="${m.img}" onclick="viewImg(this.src)"/>`:''}<span>${m.msg||''}</span></div><div style="font-size:10px;color:var(--m);margin-top:2px">${isA?'You':'User'} · ${m.sent_at}</div></div>`;}).join(''):'<div style="color:var(--m);font-size:12px;text-align:center">No messages</div>';el.scrollTop=el.scrollHeight;}
+async function aReply(){const inp=document.getElementById('aCI');const txt=inp.value.trim();if(!txt)return;const msg={id:'M'+Date.now(),user_id:admCUID,user_name:'Admin',phone:'',from_id:'admin',msg:txt,img:null,sent_at:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),read_by_admin:true};C.chats.push(msg);inp.value='';rAChatMsgs();await DB.ins('zy_chats',msg);}
+async function aSImg(input){const file=input.files[0];if(!file)return;const r=new FileReader();r.onload=async e=>{const c=await cmpImg(e.target.result,350,.7);const msg={id:'M'+Date.now(),user_id:admCUID,user_name:'Admin',phone:'',from_id:'admin',msg:'',img:c,sent_at:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),read_by_admin:true};C.chats.push(msg);rAChatMsgs();await DB.ins('zy_chats',msg);};r.readAsDataURL(file);input.value='';}
+
+// USERS ADMIN (with search + ban)
+let userSearchQ='';
+async function rAdmU(){
+  ldr(true);const allUsers=await DB.get('zy_users','role=neq.admin&order=created_at.desc');C.users=allUsers;ldr(false);
+  renderUserList();
+}
+function renderUserList(){
+  const users=C.users.filter(u=>!userSearchQ||u.name.toLowerCase().includes(userSearchQ.toLowerCase())||u.username.toLowerCase().includes(userSearchQ.toLowerCase()));
+  document.getElementById('admC').innerHTML=`<div class="sec">👥 Users</div>
+  <div class="srch-box"><input id="userSrch" placeholder="Search name or username..." value="${userSearchQ}" oninput="userSearchQ=this.value;renderUserList()"/></div>
+  ${users.length?users.map(u=>{
+    const banned=u.ban_until&&(u.ban_until==='permanent'||new Date(u.ban_until)>new Date());
+    return`<div class="rc"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer" onclick="admViewU('${u.id}')">
+      <div style="display:flex;align-items:center;gap:10px"><div style="width:40px;height:40px;border-radius:50%;background:var(--g);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#0a1228;overflow:hidden;flex-shrink:0">${u.pic?`<img src="${u.pic}" style="width:100%;height:100%;object-fit:cover"/>`:u.name[0].toUpperCase()}</div>
+      <div><div class="ru">${u.name} <span style="font-size:11px;color:var(--m)">@${u.username}</span>${banned?'<span class="ban-tag">BANNED</span>':u.previously_banned?'<span class="ban-tag">prev. banned</span>':''}</div><div class="rd">৳${u.balance}</div></div></div></div>
+      <div style="display:flex;gap:7px;margin-top:9px;flex-wrap:wrap">
+        <button class="bsm bo" onclick="admViewU('${u.id}')">Details</button>
+        <button class="bsm bban" onclick="openBanModal('${u.id}')">${banned?'Update Ban':'Ban'}</button>
+        ${banned?`<button class="bsm bs" onclick="unbanUser('${u.id}')">Unban</button>`:''}
+      </div></div>`;
+  }).join(''):'<div class="empty">No users found</div>'}`;
+}
+let banTargetId=null;
+function openBanModal(uid){
+  banTargetId=uid;const u=C.users.find(x=>x.id===uid);
+  document.getElementById('banTargetInfo').textContent=`User: ${u?.name} (@${u?.username})`;
+  document.getElementById('banReason2').value='';
+  openMo('banMo');
+}
+async function confirmBan(){
+  const hrs=parseInt(document.getElementById('banDuration').value);
+  const reason=document.getElementById('banReason2').value.trim();
+  const banUntil=hrs===999999?'permanent':new Date(Date.now()+hrs*3600000).toISOString();
+  ldr(true);
+  const u=C.users.find(x=>x.id===banTargetId);
+  // Save banned game IDs from player_info across all tournaments
+  const bannedIds=JSON.parse(localStorage.getItem('zy_banned_ids')||'[]');
+  C.tournaments.forEach(t=>{const pi=t.player_info||{};if(pi[banTargetId]?.gameId&&!bannedIds.includes(pi[banTargetId].gameId)){bannedIds.push(pi[banTargetId].gameId);}});
+  localStorage.setItem('zy_banned_ids',JSON.stringify(bannedIds));
+  await DB.upd('zy_users','id=eq.'+banTargetId,{ban_until:banUntil,ban_reason:reason||'Violation of terms',previously_banned:true});
+  if(u){u.ban_until=banUntil;u.ban_reason=reason||'Violation of terms';u.previously_banned=true;}
+  ldr(false);closeMo('banMo');toast('User banned!');renderUserList();
+}
+async function unbanUser(uid){
+  ldr(true);await DB.upd('zy_users','id=eq.'+uid,{ban_until:null,ban_reason:null});
+  const u=C.users.find(x=>x.id===uid);if(u){u.ban_until=null;u.ban_reason=null;}
+  ldr(false);toast('Unbanned!');renderUserList();
+}
+async function adjBal(uid){const amt=parseInt(document.getElementById('adj_'+uid)?.value)||0;if(!amt){toast('Enter amount');return;}ldr(true);const r=await DB.get('zy_users','id=eq.'+uid);if(r.length){const u=r[0];const nb=Math.max(0,u.balance+amt);const txs=u.txs||[];txs.unshift({type:'Admin Adjustment',amount:Math.abs(amt),dir:amt>0?'in':'out',date:new Date().toLocaleDateString(),status:'approved'});await DB.upd('zy_users','id=eq.'+uid,{balance:nb,txs});}ldr(false);toast('Updated!');rAdmU();}
+async function admViewU(uid){
+  ldr(true);const r=await DB.get('zy_users','id=eq.'+uid);ldr(false);if(!r.length)return;const u=r[0];
+  const banned=u.ban_until&&(u.ban_until==='permanent'||new Date(u.ban_until)>new Date());
+  document.getElementById('admC').innerHTML=`<div class="backbtn" onclick="rAdmU()">← Users</div>
+  <div class="af"><div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+    <div style="width:56px;height:56px;border-radius:50%;background:var(--g);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#0a1228;overflow:hidden;flex-shrink:0">${u.pic?`<img src="${u.pic}" style="width:100%;height:100%;object-fit:cover"/>`:u.name[0].toUpperCase()}</div>
+    <div><div style="font-size:17px;font-weight:700">${u.name}${u.previously_banned?'<span class="ban-tag">prev. banned</span>':''}</div><div style="font-size:13px;color:var(--g3)">@${u.username}</div></div></div>
+    ${[['Email',u.email||'-'],['Balance','৳'+u.balance],['Joined',(u.joined||[]).length],['Won',u.won||0],['Status',banned?'🚫 Banned':'✅ Active']].map(([k,v])=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px solid #1e2a4a"><span style="color:var(--m)">${k}</span><b>${v}</b></div>`).join('')}
+    ${u.ban_reason?`<div style="font-size:12px;color:#ff8080;margin-top:8px">Ban reason: ${u.ban_reason}</div>`:''}
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    <input class="inp" style="flex:1;font-size:13px;margin:0" id="adj_${u.id}" placeholder="±amount" type="number"/>
+    <button class="bsm bo" onclick="adjBal('${u.id}')">Adjust Balance</button>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="bsm bban" onclick="openBanModal('${u.id}')">${banned?'Update Ban':'Ban User'}</button>
+    ${banned?`<button class="bsm bs" onclick="unbanUser('${u.id}')">Unban</button>`:''}
+  </div>`;}
+
+// POLLS ADMIN
+function rAdmP(){const polls=C.polls;const L=['a','b','c','d','e'];document.getElementById('admC').innerHTML=`<div class="af"><div class="aft">➕ Add Poll</div><input class="inp" id="pQ" placeholder="Question..." autocomplete="off"/><textarea class="inp" id="pO" placeholder="One option per line:&#10;Option A&#10;Option B"></textarea><div class="irow"><div><span class="ilbl">End Time (optional)</span><input class="inp" id="pE" type="datetime-local" style="margin:0"/></div><div></div></div><button class="bgold" style="width:auto;padding:9px 22px;margin-top:8px" onclick="admAddP()">Add Poll</button></div><div class="sec">All Polls</div>${polls.length?polls.map(p=>{const v=p.votes||[];const tot=v.reduce((a,b)=>a+b,0)||1;return`<div class="rc"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div style="font-weight:600;font-size:14px;flex:1">${p.question}</div><span class="badge ${p.ended?'bc':'bl'}" style="margin-left:8px">${p.ended?'ENDED':'ACTIVE'}</span></div>${p.end_time?`<div style="font-size:11px;color:var(--g3);margin-bottom:8px">⏰ ${new Date(p.end_time).toLocaleString()}</div>`:''} ${(p.opts||[]).map((o,i)=>{const pct=Math.round((v[i]||0)/tot*100);return`<div style="margin-bottom:5px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px"><span style="color:var(--m)">${L[i]}) ${o}</span><span style="color:var(--g3)">${v[i]||0} · ${pct}%</span></div><div class="pres-bar"><div class="pres-fill" style="width:${pct}%"></div></div></div>`;}).join('')}<div style="font-size:12px;color:var(--m);margin-top:8px">Total: ${v.reduce((a,b)=>a+b,0)}</div><div class="raf">${!p.ended?`<button class="bsm bmu" onclick="endP('${p.id}')">End Now</button>`:''}<button class="bsm bd" onclick="delP('${p.id}')">Remove</button></div></div>`;}).join(''):'<div class="empty">No polls</div>'}`;
+}
+async function admAddP(){const q=document.getElementById('pQ').value.trim(),opts=document.getElementById('pO').value.split('\n').map(x=>x.trim()).filter(Boolean),end=document.getElementById('pE').value;if(!q||opts.length<2){toast('Question & 2+ options needed');return;}const p={id:'P'+Date.now(),question:q,opts,votes:opts.map(()=>0),voted_by:[],end_time:end?new Date(end).toISOString():null,ended:false};ldr(true);await DB.ins('zy_polls',p);C.polls.unshift(p);ldr(false);document.getElementById('pQ').value='';document.getElementById('pO').value='';document.getElementById('pE').value='';toast('Added!');rAdmP();}
+async function endP(pid){const p=C.polls.find(x=>x.id===pid);if(p){p.ended=true;await DB.upd('zy_polls','id=eq.'+pid,{ended:true});}rAdmP();}
+async function delP(pid){await DB.del('zy_polls','id=eq.'+pid);C.polls=C.polls.filter(x=>x.id!==pid);rAdmP();toast('Removed');}
+
+// SETTINGS ADMIN
+function rAdmX(){document.getElementById('admC').innerHTML=`<div class="af"><div class="aft">📣 Broadcast</div><input class="inp" id="bMsg" placeholder="Message..." autocomplete="off"/><button class="bgold" style="width:auto;padding:10px 22px;margin-top:2px" onclick="doBcast()">Send</button></div><div class="af"><div class="aft">🏆 Declare Winner</div><select class="inp" id="winT" style="margin-bottom:8px">${C.tournaments.map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}</select><input class="inp" id="winN" placeholder="Winner username" autocomplete="off"/><input class="inp" id="winP" type="number" placeholder="Prize (৳)" autocomplete="off"/><button class="bgold" style="width:auto;padding:10px 22px;margin-top:2px" onclick="declW()">Declare</button></div>`;}
+function doBcast(){const msg=document.getElementById('bMsg').value.trim();if(!msg)return;showBanner('📣 '+msg);document.getElementById('bMsg').value='';toast('Sent!');}
+async function declW(){const tid=document.getElementById('winT').value,wn=document.getElementById('winN').value.trim(),prize=parseInt(document.getElementById('winP').value)||0;if(!wn){toast('Enter username');return;}const t=C.tournaments.find(x=>x.id===tid);if(!t)return;ldr(true);t.winner=wn;t.status='closed';await DB.upd('zy_tournaments','id=eq.'+tid,{winner:wn,status:'closed',player_info:{}});if(prize){const r=await DB.get('zy_users','username=eq.'+encodeURIComponent(wn));if(r.length){const u=r[0];const txs=u.txs||[];txs.unshift({type:'🏆 Won: '+t.name,amount:prize,dir:'in',date:new Date().toLocaleDateString(),status:'approved'});await DB.upd('zy_users','username=eq.'+encodeURIComponent(wn),{balance:u.balance+prize,won:(u.won||0)+1,txs});}}ldr(false);toast(wn+' winner!');document.getElementById('winN').value='';document.getElementById('winP').value='';}
+
+// ── UTILS
+function openMo(id){if(id==='depMo'){selDM=null;bMG('depMG','depMB','dep');}if(id==='withMo'){selWM=null;bMG('withMG','withMB','with');}document.getElementById(id).classList.add('open');}
+function closeMo(id){document.getElementById(id).classList.remove('open');}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',3000);}
+function showBanner(msg){const b=document.getElementById('notifBanner');b.textContent=msg;b.style.display='block';clearTimeout(b._t);b._t=setTimeout(()=>b.style.display='none',5000);}
+function viewImg(src){document.getElementById('imgFull').src=src;document.getElementById('imgMo').classList.add('open');}
+document.querySelectorAll('.mo').forEach(el=>el.addEventListener('click',e=>{if(e.target===el)el.classList.remove('open');}));
+document.addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('keydown',e=>{if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['I','J','C'].includes(e.key))||(e.ctrlKey&&e.key==='U')){e.preventDefault();return false;}});
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  // Register SW early - helps with install prompt reliability
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
