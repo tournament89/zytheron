@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
 <meta name="theme-color" content="#0d1b3e"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-title" content="Zytheron"/>
@@ -273,6 +273,7 @@ textarea.inp{resize:vertical;min-height:68px}
     </div>
     <div style="display:flex;align-items:center;gap:9px">
       <span style="font-size:13px;color:var(--g2);font-weight:600" id="topBal">৳0</span>
+      <button id="refreshBtn" onclick="doRefresh()" style="background:transparent;border:none;cursor:pointer;padding:4px;color:var(--m);font-size:18px;line-height:1;transition:.3s" title="Refresh">↻</button>
       <div class="tav" id="uAv" onclick="showPg('profile')">Z</div>
     </div>
   </div>
@@ -500,10 +501,13 @@ let installPromptReady = false;
 window.addEventListener('beforeinstallprompt', function(e) {
   e.preventDefault();
   dPr = e;
-  // Chrome will show its own install UI - we don't force our screen
 });
 
-window.addEventListener('appinstalled', function() { dPr = null; });
+window.addEventListener('appinstalled', () => {
+  // App installed - go straight to session
+  document.getElementById('instScr').style.display = 'none';
+  restoreSession();
+});
 
 function doInstall() {
   if (dPr) {
@@ -530,9 +534,28 @@ function skipInstall() {
 }
 
 function initApp() {
-  var instEl = document.getElementById('instScr');
-  if (instEl) instEl.style.display = 'none';
+  var el = document.getElementById('instScr');
+  if (el) el.style.display = 'none';
   restoreSession();
+}
+  if (isIOS) {
+    // iOS - show Safari share instructions
+    document.getElementById('iosInst').style.display = 'block';
+  } else {
+    // Android/desktop - show install button
+    // beforeinstallprompt may not have fired yet, show button with fallback
+    document.getElementById('andInst').style.display = 'block';
+    // Wait a bit for beforeinstallprompt - if it fires, button updates automatically
+    // If not (already installed / not installable), show manual instructions after 2.5s
+    setTimeout(() => {
+      if (!installPromptReady && !isSA()) {
+        const b = document.getElementById('andInst');
+        if (b && document.getElementById('instScr').style.display !== 'none') {
+          b.innerHTML = '<div style="font-size:13px;color:var(--m);line-height:2.2;background:#0d1b3e;border-radius:10px;padding:14px;text-align:left">Chrome menu (⋮) চাপো<br>→ <b style="color:var(--g2)">&quot;Add to Home screen&quot;</b><br>→ <b style="color:var(--g2)">&quot;Add&quot;</b> ✅</div><button onclick="skipInstall()" style="width:100%;padding:12px;background:transparent;color:var(--m);border:1px solid #2a3d70;border-radius:10px;font-size:14px;cursor:pointer;margin-top:10px">Skip & Open App</button>';
+        }
+      }
+    }, 2500);
+  }
 }
 
 if (document.readyState === 'loading') {
@@ -603,9 +626,9 @@ async function doLogin(){
   ldr(false);
   const user=rows.find(x=>x.pass===p);
   if(!user){LA.count++;const err=document.getElementById('loginErr');
-    if(LA.count>=3){LA.until=Date.now()+LOCKS[Math.min(LA.count-3,LOCKS.length-1)];saveLA();saveLA();err.textContent='Wrong credentials. Try again later.';err.style.display='block';startCd(LA.until);}
+    if(LA.count>=3){LA.until=Date.now()+LOCKS[Math.min(LA.count-3,LOCKS.length-1)];saveLA();err.textContent='Wrong credentials. Try again later.';err.style.display='block';startCd(LA.until);}
     else{err.textContent='Wrong username or password.';err.style.display='block';}saveLA();return;}
-  LA={count:0,until:0};saveLA();saveLA();
+  LA={count:0,until:0};saveLA();
   document.getElementById('loginErr').style.display='none';
   document.getElementById('loginCd').style.display='none';
   document.getElementById('loginBtn').disabled=false;
@@ -641,6 +664,23 @@ async function doSignup(){
   localStorage.setItem('zy_sess',JSON.stringify({id:CU.id}));
   await loadAll();showScr('user');
 }
+async function doRefresh(){
+  const btn = document.getElementById('refreshBtn');
+  if (btn) { btn.style.transform = 'rotate(360deg)'; btn.style.color = 'var(--g2)'; }
+  await loadAll();
+  // Refresh current page
+  const pages = ['home','wallet','voting','support','profile'];
+  for (const p of pages) {
+    if (document.getElementById('pg' + p.charAt(0).toUpperCase() + p.slice(1))?.className !== 'ph') {
+      await showPg(p); break;
+    }
+  }
+  updTB();
+  setTimeout(() => {
+    if (btn) { btn.style.transform = ''; btn.style.color = ''; }
+  }, 600);
+  toast('Refreshed!');
+}
 function doLogout(){
   CU=null;selGId=null;admCUID=null;pendingJoinTid=null;
   localStorage.removeItem('zy_sess');
@@ -661,14 +701,20 @@ function updTB(){
 function startAR(){
   if(autoRefT)clearInterval(autoRefT);
   autoRefT=setInterval(async()=>{
-    // Don't re-render if user is actively typing in an input/textarea
-    const activeEl=document.activeElement;
-    const isTyping=activeEl&&(activeEl.tagName==='INPUT'||activeEl.tagName==='TEXTAREA');
-    await loadAll();updDots();
+    const activeEl = document.activeElement;
+    const isTyping = activeEl && (activeEl.tagName==='INPUT' || activeEl.tagName==='TEXTAREA');
+    await loadAll();
+    updDots();
+    // Only re-render if not typing
     if(!isTyping){
       const m={t:rAdmT,g:rAdmG,w:rAdmW,d:rAdmD,s:rAdmS,u:rAdmU,p:rAdmP,x:rAdmX};
       const k=['t','g','w','d','s','u','p','x'];
-      document.querySelectorAll('#ats .at2').forEach((el,i)=>{if(el.classList.contains('on')&&m[k[i]])m[k[i]]();});
+      document.querySelectorAll('#ats .at2').forEach((el,i)=>{
+        if(el.classList.contains('on') && m[k[i]]) m[k[i]]();
+      });
+    } else {
+      // If typing in user search, just update the list silently
+      if(activeEl.id === 'userSrch') updateUserRows();
     }
   },20000);
 }
@@ -679,7 +725,25 @@ function updDots(){
 }
 function startTimers(){
   if(tmrT)clearInterval(tmrT);
-  tmrT=setInterval(()=>{
+  tmrT=setInterval(async()=>{
+    // Real-time data sync for users
+    if(CU && CU.role!=='admin'){
+      try{
+        const[fresh,ts,gs,cats]=await Promise.all([
+          DB.get('zy_users','id=eq.'+CU.id),
+          DB.get('zy_tournaments','order=start_time.asc.nullsfirst,created_at.asc'),
+          DB.get('zy_games','order=sort_order'),
+          DB.get('zy_categories','order=sort_order')
+        ]);
+        if(fresh&&fresh.length)CU=fresh[0];
+        if(ts)C.tournaments=ts;
+        if(gs)C.games=gs;
+        if(cats)C.categories=cats;
+        updTB();
+        if(selGId)renderTL(selGId,selCatId);
+        renderGG();
+      }catch(e){}
+    }
     C.tournaments.forEach(t=>{
       if(t.status==='upcoming'&&t.start_time){
         const d=new Date(t.start_time)-Date.now();
@@ -828,7 +892,7 @@ function cmpImg(src,mx,q){return new Promise(res=>{const i=new Image();i.onload=
 // ── PROFILE
 async function renderProfile(){const f=await DB.get('zy_users','id=eq.'+CU.id);if(f?.length)CU=f[0];const av=document.getElementById('profAv');if(CU.pic)av.innerHTML=`<img src="${CU.pic}"/><div class="cov">📷</div>`;else av.innerHTML=`<span>${CU.name[0].toUpperCase()}</span><div class="cov">📷</div>`;document.getElementById('profName').textContent=CU.name;document.getElementById('profUname').textContent='@'+CU.username;document.getElementById('stJ').textContent=(CU.joined||[]).length;document.getElementById('stW').textContent=CU.won||0;document.getElementById('stB').textContent=CU.balance;}
 async function chgPic(input){const file=input.files[0];if(!file)return;const r=new FileReader();r.onload=async e=>{const c=await cmpImg(e.target.result,200,.75);await DB.upd('zy_users','id=eq.'+CU.id,{pic:c});CU.pic=c;renderProfile();updTB();toast('Profile pic updated!');};r.readAsDataURL(file);input.value='';}
-function doShare(){const url = 'https://tournament89.github.io/zytheron';if(navigator.share)navigator.share({title:'Zytheron',text:'Join Zytheron! 🏆',url});else if(navigator.clipboard){navigator.clipboard.writeText(url);toast('Link copied!');}else toast(url);}
+function doShare(){const url='https://tournament89.github.io/zytheron';if(navigator.share)navigator.share({title:'Zytheron',text:'Join Zytheron! 🏆',url});else if(navigator.clipboard){navigator.clipboard.writeText(url);toast('Link copied!');}else toast(url);}
 
 // ── PAGE SWITCHER
 async function showPg(p){
@@ -985,22 +1049,79 @@ async function rAdmU(){
   ldr(true);const allUsers=await DB.get('zy_users','role=neq.admin&order=created_at.desc');C.users=allUsers;ldr(false);
   renderUserList();
 }
-function renderUserList(){
-  const users=C.users.filter(u=>!userSearchQ||u.name.toLowerCase().includes(userSearchQ.toLowerCase())||u.username.toLowerCase().includes(userSearchQ.toLowerCase()));
-  document.getElementById('admC').innerHTML=`<div class="sec">👥 Users</div>
-  <div class="srch-box"><input id="userSrch" placeholder="Search name or username..." value="${userSearchQ}" oninput="userSearchQ=this.value;renderUserList()"/></div>
-  ${users.length?users.map(u=>{
-    const banned=u.ban_until&&(u.ban_until==='permanent'||new Date(u.ban_until)>new Date());
-    return`<div class="rc"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer" onclick="admViewU('${u.id}')">
-      <div style="display:flex;align-items:center;gap:10px"><div style="width:40px;height:40px;border-radius:50%;background:var(--g);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#0a1228;overflow:hidden;flex-shrink:0">${u.pic?`<img src="${u.pic}" style="width:100%;height:100%;object-fit:cover"/>`:u.name[0].toUpperCase()}</div>
-      <div><div class="ru">${u.name} <span style="font-size:11px;color:var(--m)">@${u.username}</span>${banned?'<span class="ban-tag">BANNED</span>':u.previously_banned?'<span class="ban-tag">prev. banned</span>':''}</div><div class="rd">৳${u.balance}</div></div></div></div>
-      <div style="display:flex;gap:7px;margin-top:9px;flex-wrap:wrap">
-        <button class="bsm bo" onclick="admViewU('${u.id}')">Details</button>
-        <button class="bsm bban" onclick="openBanModal('${u.id}')">${banned?'Update Ban':'Ban'}</button>
-        ${banned?`<button class="bsm bs" onclick="unbanUser('${u.id}')">Unban</button>`:''}
-      </div></div>`;
-  }).join(''):'<div class="empty">No users found</div>'}`;
+function renderUserList() {
+  const q = userSearchQ.toLowerCase().trim();
+  let users = C.users.filter(u => u.role !== 'admin');
+  if (q) {
+    const exact = users.filter(u => u.username.toLowerCase() === q);
+    users = exact.length ? exact : users.filter(u =>
+      u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)
+    );
+  }
+  // Only rebuild full page if search box doesn't exist yet
+  const existingSrch = document.getElementById('userSrch');
+  if (!existingSrch) {
+    document.getElementById('admC').innerHTML = `<div class="sec">👥 Users (${C.users.filter(u=>u.role!=='admin').length})</div>
+    <div class="srch-box"><input id="userSrch" placeholder="Search username or name..." value="${userSearchQ}" autocomplete="off"/></div>
+    <div id="userListBody"></div>`;
+    // Attach listener once - no oninput in HTML to avoid re-render
+    const si = document.getElementById('userSrch');
+    if (si) {
+      si.addEventListener('input', function() {
+        userSearchQ = this.value;
+        updateUserRows();
+      });
+      si.focus();
+    }
+  } else {
+    // Just update list body, keep focus on search box
+    const pos = existingSrch.selectionStart;
+    updateUserRows();
+    existingSrch.focus();
+    try { existingSrch.setSelectionRange(pos, pos); } catch(e) {}
+  }
+  updateUserRows();
 }
+
+function updateUserRows() {
+  const q = userSearchQ.toLowerCase().trim();
+  let users = C.users.filter(u => u.role !== 'admin');
+  if (q) {
+    const exact = users.filter(u => u.username.toLowerCase() === q);
+    if (exact.length === 1) {
+      // Exact match - show profile
+      admViewU(exact[0].id);
+      return;
+    }
+    users = exact.length ? exact : users.filter(u =>
+      u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)
+    );
+  }
+  const el = document.getElementById('userListBody');
+  if (!el) return;
+  if (!users.length) { el.innerHTML = '<div class="empty">No users found</div>'; return; }
+  el.innerHTML = users.map(u => {
+    const banned = u.ban_until && (u.ban_until === 'permanent' || new Date(u.ban_until) > new Date());
+    return `<div class="rc" onclick="admViewU('${u.id}')" style="cursor:pointer">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:40px;height:40px;border-radius:50%;background:var(--g);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#0a1228;overflow:hidden;flex-shrink:0">
+            ${u.pic ? `<img src="${u.pic}" style="width:100%;height:100%;object-fit:cover"/>` : u.name[0].toUpperCase()}
+          </div>
+          <div>
+            <div class="ru">${u.name} <span style="font-size:11px;color:var(--m)">@${u.username}</span>
+              ${banned ? '<span class="ban-tag">BANNED</span>' : u.previously_banned ? '<span class="ban-tag">prev.banned</span>' : ''}
+            </div>
+            <div class="rd">৳${u.balance}</div>
+          </div>
+        </div>
+        <span style="color:var(--m);font-size:18px">›</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+
 let banTargetId=null;
 function openBanModal(uid){
   banTargetId=uid;const u=C.users.find(x=>x.id===uid);
@@ -1057,7 +1178,48 @@ async function delP(pid){await DB.del('zy_polls','id=eq.'+pid);C.polls=C.polls.f
 // SETTINGS ADMIN
 function rAdmX(){document.getElementById('admC').innerHTML=`<div class="af"><div class="aft">📣 Broadcast</div><input class="inp" id="bMsg" placeholder="Message..." autocomplete="off"/><button class="bgold" style="width:auto;padding:10px 22px;margin-top:2px" onclick="doBcast()">Send</button></div><div class="af"><div class="aft">🏆 Declare Winner</div><select class="inp" id="winT" style="margin-bottom:8px">${C.tournaments.map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}</select><input class="inp" id="winN" placeholder="Winner username" autocomplete="off"/><input class="inp" id="winP" type="number" placeholder="Prize (৳)" autocomplete="off"/><button class="bgold" style="width:auto;padding:10px 22px;margin-top:2px" onclick="declW()">Declare</button></div>`;}
 function doBcast(){const msg=document.getElementById('bMsg').value.trim();if(!msg)return;showBanner('📣 '+msg);document.getElementById('bMsg').value='';toast('Sent!');}
-async function declW(){const tid=document.getElementById('winT').value,wn=document.getElementById('winN').value.trim(),prize=parseInt(document.getElementById('winP').value)||0;if(!wn){toast('Enter username');return;}const t=C.tournaments.find(x=>x.id===tid);if(!t)return;ldr(true);t.winner=wn;t.status='closed';await DB.upd('zy_tournaments','id=eq.'+tid,{winner:wn,status:'closed',player_info:{}});if(prize){const r=await DB.get('zy_users','username=eq.'+encodeURIComponent(wn));if(r.length){const u=r[0];const txs=u.txs||[];txs.unshift({type:'🏆 Won: '+t.name,amount:prize,dir:'in',date:new Date().toLocaleDateString(),status:'approved'});await DB.upd('zy_users','username=eq.'+encodeURIComponent(wn),{balance:u.balance+prize,won:(u.won||0)+1,txs});}}ldr(false);toast(wn+' winner!');document.getElementById('winN').value='';document.getElementById('winP').value='';}
+async function declW(){
+  const tid = document.getElementById('winT').value;
+  const wn = document.getElementById('winN').value.trim();
+  const prize = parseInt(document.getElementById('winP').value) || 0;
+  const p2 = parseInt(document.getElementById('winP2')?.value) || 0;
+  const p3 = parseInt(document.getElementById('winP3')?.value) || 0;
+  const wn2 = document.getElementById('winN2')?.value.trim() || '';
+  const wn3 = document.getElementById('winN3')?.value.trim() || '';
+  if (!wn) { toast('1st place username দাও'); return; }
+  const t = C.tournaments.find(x => x.id === tid);
+  if (!t) return;
+  ldr(true);
+  t.winner = wn; t.status = 'closed';
+  await DB.upd('zy_tournaments', 'id=eq.' + tid, {winner: wn, status: 'closed', player_info: {}});
+  // Auto credit prizes
+  async function creditWinner(username, amount, place) {
+    if (!username || !amount) return;
+    const r = await DB.get('zy_users', 'username=eq.' + encodeURIComponent(username));
+    if (!r.length) return;
+    const u = r[0];
+    // Anti-duplicate: check if already paid
+    const alreadyPaid = (u.txs||[]).some(tx => tx.type === '🏆 Won: ' + t.name + ' (' + place + ')');
+    if (alreadyPaid) { toast(username + ' already paid!'); return; }
+    const txs = u.txs || [];
+    txs.unshift({type:'🏆 Won: '+t.name+' ('+place+')',amount,dir:'in',date:new Date().toLocaleDateString(),status:'approved'});
+    await DB.upd('zy_users','username=eq.'+encodeURIComponent(username),{
+      balance: u.balance + amount,
+      won: (u.won||0) + 1,
+      txs
+    });
+  }
+  await creditWinner(wn, prize, '1st');
+  await creditWinner(wn2, p2, '2nd');
+  await creditWinner(wn3, p3, '3rd');
+  ldr(false);
+  let msg = '🏆 ' + wn + ' declared winner!';
+  if (prize) msg += ' ৳' + prize + ' credited';
+  toast(msg);
+  ['winN','winN2','winN3','winP','winP2','winP3'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+}
 
 // ── UTILS
 function openMo(id){if(id==='depMo'){selDM=null;bMG('depMG','depMB','dep');}if(id==='withMo'){selWM=null;bMG('withMG','withMB','with');}document.getElementById(id).classList.add('open');}
